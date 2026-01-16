@@ -7,6 +7,9 @@ import { SPACES, TIME_SLOTS } from './constants';
 import { BookingState, Space, TimeSlot, User, BookingRecord } from './types';
 import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle } from 'lucide-react';
 
+// Channel name for cross-tab communication
+const BROADCAST_CHANNEL_NAME = 'find-my-space-updates';
+
 function App() {
   const [user, setUser] = useState<User | null>(null);
   
@@ -21,8 +24,10 @@ function App() {
   const [timeFilter, setTimeFilter] = useState<'ALL' | 'AM' | 'PM'>('ALL');
   const [scheduleFilter, setScheduleFilter] = useState<'TODAY' | 'WEEK' | 'MONTH'>('TODAY');
 
-  // Load bookings from local storage on mount
+  // Load bookings from local storage and setup sync listeners
   useEffect(() => {
+    const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+
     const loadBookings = () => {
         const storedBookings = localStorage.getItem('findMySpaceBookings');
         if (storedBookings) {
@@ -34,9 +39,17 @@ function App() {
         }
     };
 
+    // Initial load
     loadBookings();
 
-    // Listen for storage events to sync across tabs in the same browser
+    // Listen for broadcast messages from other tabs
+    channel.onmessage = (event) => {
+        if (event.data === 'BOOKING_UPDATED') {
+            loadBookings();
+        }
+    };
+
+    // Fallback: Listen for storage events (also handles cross-tab)
     const handleStorageChange = (e: StorageEvent) => {
         if (e.key === 'findMySpaceBookings') {
             loadBookings();
@@ -44,8 +57,32 @@ function App() {
     };
 
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    
+    return () => {
+        channel.close();
+        window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
+
+  // Real-time Conflict Handling: Deselect seats if they get booked by someone else while viewing
+  useEffect(() => {
+    if (state.selectedSeats.length > 0 && bookings.length > 0) {
+        const validSelections = state.selectedSeats.filter(seatId => {
+            const isNowBooked = bookings.some(b => 
+                b.spaceId === state.selectedSpace?.id && 
+                b.timeId === state.selectedTime?.id && 
+                b.seatId === seatId
+            );
+            return !isNowBooked;
+        });
+
+        // If the number of valid seats is less than what we had selected, update state
+        if (validSelections.length !== state.selectedSeats.length) {
+            setState(prev => ({ ...prev, selectedSeats: validSelections }));
+            // Note: The UI will automatically update the seat to "Occupied" (gray) due to the bookings update
+        }
+    }
+  }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats]);
 
   // Scroll to top on step change
   useEffect(() => {
@@ -95,7 +132,7 @@ function App() {
     if (!state.selectedSpace || !state.selectedTime) return;
 
     // Simulate Atomic Transaction:
-    // 1. Re-read storage to get the absolute latest state (in case another tab wrote data)
+    // 1. Re-read storage to get the absolute latest state (in case another tab wrote data milliseconds ago)
     const latestStr = localStorage.getItem('findMySpaceBookings');
     const latestBookings: BookingRecord[] = latestStr ? JSON.parse(latestStr) : [];
 
@@ -129,6 +166,11 @@ function App() {
     const updatedBookings = [...latestBookings, ...newBookings];
     setBookings(updatedBookings);
     localStorage.setItem('findMySpaceBookings', JSON.stringify(updatedBookings));
+
+    // 5. Trigger Real-time Sync across tabs
+    const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+    channel.postMessage('BOOKING_UPDATED');
+    channel.close();
 
     setState(prev => ({ ...prev, step: 'confirmation' }));
   };
