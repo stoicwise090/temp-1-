@@ -141,14 +141,27 @@ function App() {
 
   // --- AUTO DESELECTION ---
   useEffect(() => {
+    // If we are in confirmation step, we don't need to check for conflicts 
+    // because we just successfully booked these seats.
+    if (state.step === 'confirmation') return;
+
     if (state.selectedSeats.length > 0 && bookings.length > 0) {
         const validSelections = state.selectedSeats.filter(seatId => {
-            const isNowBooked = bookings.some(b => 
+            const blockingBooking = bookings.find(b => 
                 b.spaceId === state.selectedSpace?.id && 
                 b.timeId === state.selectedTime?.id && 
                 b.seatId === seatId
             );
-            return !isNowBooked;
+
+            // If no booking exists, the seat is still valid
+            if (!blockingBooking) return true;
+
+            // If the booking exists BUT it belongs to the current user,
+            // we treat it as valid (not "stolen") so it doesn't trigger the error toast.
+            if (blockingBooking.userId === user?.studentId) return true;
+
+            // Otherwise, it was taken by someone else
+            return false;
         });
 
         if (validSelections.length !== state.selectedSeats.length) {
@@ -157,7 +170,7 @@ function App() {
             addToast('error', `Seat ${lostSeats.join(', ')} was just booked by someone else.`);
         }
     }
-  }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats]);
+  }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats, state.step, user?.studentId]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -176,7 +189,7 @@ function App() {
         step: 'login',
         selectedSpace: null,
         selectedTime: null,
-        selectedSeats: []
+        selectedSeats: [],
     });
   };
 
@@ -256,6 +269,10 @@ function App() {
         
         setState(prev => ({ ...prev, step: 'confirmation' }));
         addToast('success', 'Booking Confirmed Successfully!');
+        
+        // Immediately refresh bookings to ensure local state is up to date
+        // which might help UI reflect the "booked" status faster
+        refreshBookings();
     } catch (error: any) {
         addToast('error', error.message || "Booking failed due to a conflict.");
         await refreshBookings();
