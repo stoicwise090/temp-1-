@@ -1,0 +1,5 @@
+{
+  "name": "Find My Space",
+  "description": "A modern campus facility booking system allowing students to reserve seats in the Library, Seminar Halls, and Computer Labs.",
+  "requestFramePermissions": []
+}
