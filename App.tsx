@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { SeatMap } from './components/SeatMap';
 import { Login } from './components/Login';
 import { Profile } from './components/Profile';
+import { ToastContainer, ToastMessage, ToastType } from './components/Toast';
 import { SPACES, TIME_SLOTS } from './constants';
 import { BookingState, Space, TimeSlot, User, BookingRecord } from './types';
-import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle, Zap, ZapOff } from 'lucide-react';
+import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle, Zap, ZapOff, Trash2 } from 'lucide-react';
 import { api } from './api';
 
 // Channel name for cross-tab communication
@@ -13,9 +14,10 @@ const BROADCAST_CHANNEL_NAME = 'find-my-space-updates';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   
   const [state, setState] = useState<BookingState>({
-    step: 'login', // Default start at login
+    step: 'login',
     selectedSpace: null,
     selectedTime: null,
     selectedSeats: [],
@@ -25,22 +27,30 @@ function App() {
   const [timeFilter, setTimeFilter] = useState<'ALL' | 'AM' | 'PM'>('ALL');
   const [scheduleFilter, setScheduleFilter] = useState<'TODAY' | 'WEEK' | 'MONTH'>('TODAY');
   
-  // UI States
   const [isProcessing, setIsProcessing] = useState(false);
   const [simulationEnabled, setSimulationEnabled] = useState(false);
   const simulationIntervalRef = useRef<number | null>(null);
 
-  // Load bookings using the API
-  const refreshBookings = async () => {
+  // --- TOAST SYSTEM ---
+  const addToast = (type: ToastType, message: string) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, type, message }]);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  // --- DATA SYNC ---
+  const refreshBookings = useCallback(async () => {
     try {
         const data = await api.getBookings();
         setBookings(data);
     } catch (error) {
         console.error("Failed to fetch bookings");
     }
-  };
+  }, []);
 
-  // Initial Load & Listeners
   useEffect(() => {
     refreshBookings();
 
@@ -48,10 +58,11 @@ function App() {
     channel.onmessage = (event) => {
         if (event.data === 'BOOKING_UPDATED') {
             refreshBookings();
+            // Optional: Notify user if they are on a relevant screen
+            // addToast('info', 'Schedule updated from another device');
         }
     };
 
-    // Fallback for same-browser storage events
     const handleStorageChange = (e: StorageEvent) => {
         if (e.key === 'findMySpaceBookings') refreshBookings();
     };
@@ -62,61 +73,78 @@ function App() {
         channel.close();
         window.removeEventListener('storage', handleStorageChange);
     };
-  }, []);
+  }, [refreshBookings]);
 
   // --- TRAFFIC SIMULATION LOGIC ---
-  // This simulates "Other Users" booking seats to demonstrate race condition handling
   useEffect(() => {
     if (simulationEnabled && state.selectedSpace && state.selectedTime) {
         const runSimulation = async () => {
-            // 1. Get current bookings freshly
+            if (!state.selectedSpace || !state.selectedTime) return;
+
+            // 1. Fetch latest to avoid trying to book obviously taken seats (smarter ghost)
             const currentBookings = await api.getBookings();
             
-            // 2. Calculate available seats (roughly) for current view
-            // Note: This is a simplified randomizer for demo purposes
-            const MAX_ROWS = 6; 
-            const MAX_COLS = 8;
-            const r = Math.floor(Math.random() * MAX_ROWS);
-            const c = Math.floor(Math.random() * MAX_COLS);
-            const randomSeatId = state.selectedSpace?.type === 'library' ? `R${r}-C${c}` : `SEM-R${r}-C${c}`; // Simplified
+            // 2. Determine bounds based on space type to generate VALID seat IDs
+            let randomSeatId = '';
+            
+            if (state.selectedSpace.type === 'library') {
+                const r = Math.floor(Math.random() * 6);
+                const c = Math.floor(Math.random() * 8);
+                if (c === 4) return; // Gap
+                randomSeatId = `R${r}-C${c}`;
+            } else if (state.selectedSpace.type === 'lab') {
+                const r = Math.floor(Math.random() * 8);
+                const c = Math.floor(Math.random() * 10);
+                randomSeatId = `LAB-R${r}-C${c}`;
+            } else {
+                const r = Math.floor(Math.random() * 8);
+                const c = Math.floor(Math.random() * 14);
+                randomSeatId = `SEM-R${r}-C${c}`;
+            }
 
-            // 3. Attempt to book as a "Ghost User"
+            // 3. Ghost Booking Payload
+            const ghostBooking: BookingRecord = {
+                spaceId: state.selectedSpace.id,
+                timeId: state.selectedTime.id,
+                seatId: randomSeatId,
+                timestamp: Date.now(),
+                userId: 'ghost-' + Math.floor(Math.random() * 9999)
+            };
+
             const isTaken = currentBookings.some(b => 
-                b.spaceId === state.selectedSpace?.id && 
-                b.timeId === state.selectedTime?.id && 
-                b.seatId === randomSeatId
+                b.spaceId === ghostBooking.spaceId && 
+                b.timeId === ghostBooking.timeId && 
+                b.seatId === ghostBooking.seatId
             );
 
             if (!isTaken) {
-                const ghostBooking: BookingRecord = {
-                    spaceId: state.selectedSpace!.id,
-                    timeId: state.selectedTime!.id,
-                    seatId: randomSeatId,
-                    timestamp: Date.now(),
-                    userId: 'ghost-user-' + Math.floor(Math.random() * 1000)
-                };
-                
                 try {
                     await api.bookSeats([ghostBooking]);
-                    console.log("👻 Simulation: Ghost user booked seat", randomSeatId);
+                    // Only show toast if the ghost booked a seat we are currently looking at or selected
+                    if (state.selectedSeats.includes(randomSeatId)) {
+                        addToast('info', `Ghost User snatched seat ${randomSeatId}!`);
+                    }
                 } catch (e) {
-                    // Ignore conflicts in simulation
+                    // Ghost failed silently (race condition with real user or another ghost)
                 }
             }
         };
 
-        simulationIntervalRef.current = window.setInterval(runSimulation, 3000); // Try to book every 3 seconds
+        simulationIntervalRef.current = window.setInterval(runSimulation, 2500);
     } else {
-        if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+        if (simulationIntervalRef.current) {
+            clearInterval(simulationIntervalRef.current);
+            simulationIntervalRef.current = null;
+        }
     }
 
     return () => {
         if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
     };
-  }, [simulationEnabled, state.selectedSpace, state.selectedTime]);
+  }, [simulationEnabled, state.selectedSpace, state.selectedTime, state.selectedSeats]);
 
 
-  // Real-time Conflict Handling: Auto-deselect if visually booked
+  // --- AUTO DESELECTION (Real-time Conflict Handling in UI) ---
   useEffect(() => {
     if (state.selectedSeats.length > 0 && bookings.length > 0) {
         const validSelections = state.selectedSeats.filter(seatId => {
@@ -129,7 +157,10 @@ function App() {
         });
 
         if (validSelections.length !== state.selectedSeats.length) {
+            // Identify which seat was lost
+            const lostSeats = state.selectedSeats.filter(s => !validSelections.includes(s));
             setState(prev => ({ ...prev, selectedSeats: validSelections }));
+            addToast('error', `Seat ${lostSeats.join(', ')} was just booked by someone else.`);
         }
     }
   }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats]);
@@ -143,6 +174,7 @@ function App() {
   const handleLogin = (loggedInUser: User) => {
     setUser(loggedInUser);
     setState(prev => ({ ...prev, step: 'home' }));
+    addToast('success', `Welcome back, ${loggedInUser.name}`);
   };
 
   const handleLogout = () => {
@@ -183,7 +215,6 @@ function App() {
     
     setIsProcessing(true);
 
-    // Prepare booking payload
     const newBookings: BookingRecord[] = state.selectedSeats.map(seatId => ({
       spaceId: state.selectedSpace!.id,
       timeId: state.selectedTime!.id,
@@ -193,16 +224,14 @@ function App() {
     }));
 
     try {
-        // CALL THE API (Simulated Backend)
         await api.bookSeats(newBookings);
         
-        // Success!
         setState(prev => ({ ...prev, step: 'confirmation' }));
+        addToast('success', 'Booking Confirmed Successfully!');
     } catch (error: any) {
-        // Handle Race Condition Error
-        alert(error.message || "Booking failed due to a conflict.");
+        addToast('error', error.message || "Booking failed due to a conflict.");
         
-        // Refresh data to show the user what was taken
+        // Refresh to show occupied status
         await refreshBookings();
         setState(prev => ({ ...prev, selectedSeats: [] }));
     } finally {
@@ -219,6 +248,14 @@ function App() {
     });
   };
 
+  const handleDebugReset = async () => {
+      if(window.confirm("Are you sure you want to clear all bookings data?")) {
+          await api.resetDatabase();
+          addToast('success', 'Database cleared');
+          refreshBookings();
+      }
+  }
+
   const goBack = () => {
     setState(prev => {
       if (prev.step === 'profile') return { ...prev, step: 'home' };
@@ -230,11 +267,11 @@ function App() {
   };
 
   // --- RENDER HELPERS ---
+  // (Most render helpers remained similar but optimized for context)
 
   const renderSchedule = () => {
     if (!user) return null;
     
-    // Enrich bookings with space and time info
     const allMyBookings = bookings
       .filter(b => b.userId === user.studentId)
       .map(b => {
@@ -244,37 +281,27 @@ function App() {
       })
       .filter((item): item is BookingRecord & { space: Space, time: TimeSlot } => !!item.space && !!item.time);
 
-    // Filter bookings based on scheduleFilter (Today, Week, Month)
     const myBookings = allMyBookings.filter(b => {
         const bookingDate = new Date(b.timestamp);
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         
         if (scheduleFilter === 'TODAY') {
-            // Check if booking is today
             return bookingDate >= startOfToday && bookingDate < new Date(startOfToday.getTime() + 86400000);
         }
-        
         if (scheduleFilter === 'WEEK') {
-            // Check if booking is in the current week (Sunday to Saturday)
             const startOfWeek = new Date(startOfToday);
-            startOfWeek.setDate(startOfToday.getDate() - startOfToday.getDay()); // Start of week (Sunday)
+            startOfWeek.setDate(startOfToday.getDate() - startOfToday.getDay());
             const endOfWeek = new Date(startOfWeek);
-            endOfWeek.setDate(startOfWeek.getDate() + 7); // Start of next week
-            
+            endOfWeek.setDate(startOfWeek.getDate() + 7);
             return bookingDate >= startOfWeek && bookingDate < endOfWeek;
         }
-        
         if (scheduleFilter === 'MONTH') {
-            // Check if booking is in the current month
-            return bookingDate.getMonth() === now.getMonth() && 
-                   bookingDate.getFullYear() === now.getFullYear();
+            return bookingDate.getMonth() === now.getMonth() && bookingDate.getFullYear() === now.getFullYear();
         }
-        
         return true;
     });
 
-    // Determine the empty state message
     const getEmptyStateMessage = () => {
         switch (scheduleFilter) {
             case 'TODAY': return "You haven't booked any spaces for today.";
@@ -294,7 +321,6 @@ function App() {
                         </div>
                         <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Your Schedule</h2>
                     </div>
-                    {/* Filter Toggles */}
                     <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                         {(['TODAY', 'WEEK', 'MONTH'] as const).map((filter) => (
                             <button
@@ -323,25 +349,17 @@ function App() {
         );
     }
 
-    // Group by Space and Time
     const groupedBookings: Record<string, { space: Space, time: TimeSlot, seats: string[] }> = {};
     
     myBookings.forEach(b => {
         const key = `${b.spaceId}-${b.timeId}`;
         if (!groupedBookings[key]) {
-            groupedBookings[key] = {
-                space: b.space,
-                time: b.time,
-                seats: []
-            };
+            groupedBookings[key] = { space: b.space, time: b.time, seats: [] };
         }
         groupedBookings[key].seats.push(b.seatId);
     });
 
-    // Convert to array and sort by time
-    const sortedGroups = Object.values(groupedBookings).sort((a, b) => {
-        return a.time.id.localeCompare(b.time.id);
-    });
+    const sortedGroups = Object.values(groupedBookings).sort((a, b) => a.time.id.localeCompare(b.time.id));
 
     return (
       <div className="mb-12 animate-slide-up">
@@ -353,7 +371,6 @@ function App() {
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Your Schedule</h2>
             </div>
             
-            {/* Filter Toggles */}
             <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                 {(['TODAY', 'WEEK', 'MONTH'] as const).map((filter) => (
                     <button
@@ -389,12 +406,10 @@ function App() {
                              {group.space.type === 'lab' && <MapPin size={18} />}
                         </div>
                     </div>
-                    
                     <div className="mb-4">
                         <h3 className="font-bold text-slate-700 dark:text-slate-200 leading-tight mb-1">{group.space.name}</h3>
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">{group.space.floor}</p>
                     </div>
-
                     <div className="mt-auto pt-4 border-t border-slate-50 dark:border-slate-700 flex justify-between items-center">
                         <div className="text-xs text-slate-500 dark:text-slate-400">
                             <span className="font-bold text-indigo-600 dark:text-indigo-400">{group.seats.length}</span> {group.seats.length === 1 ? 'Seat' : 'Seats'}
@@ -414,7 +429,6 @@ function App() {
                     </div>
                 </div>
             ))}
-            
             <button 
                 onClick={() => document.getElementById('spaces-grid')?.scrollIntoView({ behavior: 'smooth' })}
                 className="min-w-[100px] flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-500 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all snap-center"
@@ -500,8 +514,6 @@ function App() {
                 Booking for <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{state.selectedSpace?.name}</span>
               </p>
             </div>
-            
-            {/* Filter Tabs */}
             <div className="flex bg-slate-100 dark:bg-slate-700 p-1.5 rounded-xl self-start sm:self-auto">
               {(['ALL', 'AM', 'PM'] as const).map((filter) => (
                  <button
@@ -550,8 +562,6 @@ function App() {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
         <div className="flex flex-col lg:flex-row gap-8">
-          
-          {/* Main Map Area */}
           <div className="flex-grow bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-3xl p-6 lg:p-10 shadow-xl shadow-slate-200/60 dark:shadow-slate-900/60 transition-colors duration-300">
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Select Seats</h2>
@@ -565,8 +575,8 @@ function App() {
               space={state.selectedSpace} 
               selectedSeats={state.selectedSeats} 
               onToggleSeat={toggleSeat} 
-              bookings={bookings} // Pass full bookings list
-              currentUserId={user?.studentId} // Pass current user to identify 'my bookings'
+              bookings={bookings}
+              currentUserId={user?.studentId}
               selectedTimeId={state.selectedTime?.id}
             />
             
@@ -590,11 +600,9 @@ function App() {
             </div>
           </div>
 
-          {/* Sidebar Summary */}
           <div className="lg:w-80 flex-shrink-0">
              <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-3xl p-6 sticky top-24 shadow-lg shadow-slate-200/50 dark:shadow-slate-900/50 transition-colors duration-300">
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6">Booking Summary</h3>
-                
                 <div className="space-y-4 mb-8">
                   <div className="flex items-start gap-3">
                     <div className="p-2 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg"><MapPin size={18} /></div>
@@ -647,22 +655,17 @@ function App() {
   const renderConfirmation = () => (
     <div className="max-w-md mx-auto px-4 py-16 text-center animate-fade-in">
       <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 shadow-2xl shadow-slate-200/60 dark:shadow-slate-900/60 border border-slate-100 dark:border-slate-700 relative overflow-hidden transition-colors duration-300">
-        {/* Decorative circle */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-green-50 dark:bg-green-900/20 rounded-full"></div>
-        
         <div className="relative z-10">
           <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
             <CheckCircle2 size={32} strokeWidth={3} />
           </div>
-          
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">You're all set!</h2>
           <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">A confirmation email has been sent to your student ID.</p>
-
           <div className="border-t-2 border-dashed border-slate-100 dark:border-slate-700 my-6 relative">
              <div className="absolute -left-10 -top-3 w-6 h-6 bg-slate-50 dark:bg-slate-900 rounded-full"></div>
              <div className="absolute -right-10 -top-3 w-6 h-6 bg-slate-50 dark:bg-slate-900 rounded-full"></div>
           </div>
-
           <div className="space-y-4 text-left">
             <div className="flex justify-between items-center">
               <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Location</span>
@@ -677,7 +680,6 @@ function App() {
               <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{state.selectedSeats.join(', ')}</span>
             </div>
           </div>
-
           <div className="mt-8 pt-6">
              <div className="w-full h-16 bg-slate-100 dark:bg-slate-700 rounded-lg flex items-center justify-center border border-slate-200 dark:border-slate-600">
                  <span className="text-slate-400 dark:text-slate-500 text-xs font-mono tracking-widest">BARCODE-SCAN-HERE</span>
@@ -685,32 +687,24 @@ function App() {
           </div>
         </div>
       </div>
-
-      <button
-        onClick={handleReset}
-        className="mt-8 text-slate-500 dark:text-slate-400 font-medium hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-sm flex items-center justify-center gap-2 mx-auto"
-      >
+      <button onClick={handleReset} className="mt-8 text-slate-500 dark:text-slate-400 font-medium hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-sm flex items-center justify-center gap-2 mx-auto">
         <ArrowLeft size={16} /> Book Another Space
       </button>
     </div>
   );
 
-  // If not logged in, show Login page (assuming simple gatekeeping)
   if (state.step === 'login') {
       return <Login onLogin={handleLogin} />;
   }
 
   return (
     <div className="min-h-screen flex flex-col font-sans transition-colors duration-500">
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
       <Navbar user={user} onProfileClick={navigateToProfile} />
 
-      {/* Breadcrumb / Back Button */}
       {state.step !== 'home' && state.step !== 'confirmation' && (
         <div className="max-w-7xl mx-auto px-4 py-6 w-full animate-fade-in">
-          <button 
-            onClick={goBack}
-            className="group flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors px-4 py-2 rounded-lg hover:bg-white dark:hover:bg-slate-800"
-          >
+          <button onClick={goBack} className="group flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors px-4 py-2 rounded-lg hover:bg-white dark:hover:bg-slate-800">
             <div className="w-8 h-8 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center group-hover:border-indigo-200 dark:group-hover:border-indigo-500 shadow-sm">
                <ArrowLeft size={16} />
             </div>
@@ -730,18 +724,28 @@ function App() {
       <footer className="mt-auto py-8 text-center text-slate-400 dark:text-slate-500 text-xs border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors duration-300">
         <p className="mb-2">© 2024 Find My Space. K.K Wagh Institute Of Engineering Project.</p>
         <div className="flex flex-col items-center justify-center gap-2 mt-4">
-             <button 
-                onClick={() => setSimulationEnabled(!simulationEnabled)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${
-                    simulationEnabled 
-                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800' 
-                    : 'bg-slate-50 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
-                }`}
-             >
-                {simulationEnabled ? <Zap size={10} className="fill-current" /> : <ZapOff size={10} />}
-                {simulationEnabled ? "Simulating Live Traffic" : "Enable Traffic Simulator"}
-             </button>
-             <p className="flex items-center justify-center gap-1 opacity-70">
+             <div className="flex gap-2">
+                 <button 
+                    onClick={() => setSimulationEnabled(!simulationEnabled)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${
+                        simulationEnabled 
+                        ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800' 
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
+                    }`}
+                 >
+                    {simulationEnabled ? <Zap size={10} className="fill-current" /> : <ZapOff size={10} />}
+                    {simulationEnabled ? "Simulating Live Traffic" : "Enable Traffic Simulator"}
+                 </button>
+                 
+                 <button 
+                    onClick={handleDebugReset}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-400 hover:text-red-500 hover:border-red-200 transition-all"
+                    title="Clear Database"
+                 >
+                    <Trash2 size={10} />
+                 </button>
+             </div>
+             <p className="flex items-center justify-center gap-1 opacity-70 mt-2">
                 <AlertCircle size={10} /> 
                 Demo Mode: Data is stored in your browser's local storage.
             </p>
