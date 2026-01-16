@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Space, Seat, BookingRecord } from '../types';
-import { Monitor, Table, Check, Lock } from 'lucide-react';
+import { Monitor, Table, Check, Lock, CheckCircle2 } from 'lucide-react';
 
 interface SeatMapProps {
   space: Space;
@@ -226,7 +226,8 @@ const SeatButton: React.FC<{
   } else if (isBooked) {
     baseClass += "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed border border-slate-300 dark:border-slate-700 ";
   } else if (isSelected) {
-    baseClass += "bg-indigo-600 dark:bg-indigo-500 text-white shadow-lg shadow-indigo-500/40 scale-110 z-10 ring-2 ring-indigo-600 dark:ring-indigo-400 ring-offset-2 dark:ring-offset-slate-800 animate-pop ";
+    // Note: removed animate-pop from here to apply it to the icon instead for cleaner effect
+    baseClass += "bg-indigo-600 dark:bg-indigo-500 text-white shadow-lg shadow-indigo-500/40 scale-110 z-10 ring-2 ring-indigo-600 dark:ring-indigo-400 ring-offset-2 dark:ring-offset-slate-800 ";
   } else {
     baseClass += "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer border border-slate-200 dark:border-slate-600 shadow-sm hover:border-indigo-400 dark:hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-white hover:bg-indigo-50 dark:hover:bg-indigo-500/20 hover:-translate-y-0.5 hover:shadow-md ";
   }
@@ -242,10 +243,15 @@ const SeatButton: React.FC<{
       className={`${baseClass} ${sizeClass}`}
       title={titleText}
     >
-      {type === 'lab' ? (
-        isBookedByMe ? <Check size={16} /> : (isBooked ? <Lock size={14} /> : <Monitor size={15} />)
+      {isBookedByMe ? (
+        <Check size={16} strokeWidth={3} />
+      ) : isSelected ? (
+        // Added CheckCircle2 with pop animation for selection
+        <CheckCircle2 size={type === 'seminar' ? 16 : 18} className="animate-pop" />
+      ) : type === 'lab' ? (
+        isBooked ? <Lock size={14} /> : <Monitor size={15} />
       ) : (
-        isBookedByMe ? <Check size={16} /> : (isBooked ? <Lock size={14} /> : seat.label)
+        isBooked ? <Lock size={14} /> : seat.label
       )}
     </button>
   );

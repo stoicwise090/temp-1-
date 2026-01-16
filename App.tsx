@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { SeatMap } from './components/SeatMap';
 import { Login } from './components/Login';
 import { Profile } from './components/Profile';
 import { SPACES, TIME_SLOTS } from './constants';
 import { BookingState, Space, TimeSlot, User, BookingRecord } from './types';
-import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle, Zap, ZapOff } from 'lucide-react';
+import { api } from './api';
 
 // Channel name for cross-tab communication
 const BROADCAST_CHANNEL_NAME = 'find-my-space-updates';
@@ -23,37 +24,36 @@ function App() {
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [timeFilter, setTimeFilter] = useState<'ALL' | 'AM' | 'PM'>('ALL');
   const [scheduleFilter, setScheduleFilter] = useState<'TODAY' | 'WEEK' | 'MONTH'>('TODAY');
+  
+  // UI States
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [simulationEnabled, setSimulationEnabled] = useState(false);
+  const simulationIntervalRef = useRef<number | null>(null);
 
-  // Load bookings from local storage and setup sync listeners
+  // Load bookings using the API
+  const refreshBookings = async () => {
+    try {
+        const data = await api.getBookings();
+        setBookings(data);
+    } catch (error) {
+        console.error("Failed to fetch bookings");
+    }
+  };
+
+  // Initial Load & Listeners
   useEffect(() => {
+    refreshBookings();
+
     const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-
-    const loadBookings = () => {
-        const storedBookings = localStorage.getItem('findMySpaceBookings');
-        if (storedBookings) {
-            try {
-                setBookings(JSON.parse(storedBookings));
-            } catch (error) {
-                console.error("Failed to parse bookings from local storage", error);
-            }
-        }
-    };
-
-    // Initial load
-    loadBookings();
-
-    // Listen for broadcast messages from other tabs
     channel.onmessage = (event) => {
         if (event.data === 'BOOKING_UPDATED') {
-            loadBookings();
+            refreshBookings();
         }
     };
 
-    // Fallback: Listen for storage events (also handles cross-tab)
+    // Fallback for same-browser storage events
     const handleStorageChange = (e: StorageEvent) => {
-        if (e.key === 'findMySpaceBookings') {
-            loadBookings();
-        }
+        if (e.key === 'findMySpaceBookings') refreshBookings();
     };
 
     window.addEventListener('storage', handleStorageChange);
@@ -64,7 +64,59 @@ function App() {
     };
   }, []);
 
-  // Real-time Conflict Handling: Deselect seats if they get booked by someone else while viewing
+  // --- TRAFFIC SIMULATION LOGIC ---
+  // This simulates "Other Users" booking seats to demonstrate race condition handling
+  useEffect(() => {
+    if (simulationEnabled && state.selectedSpace && state.selectedTime) {
+        const runSimulation = async () => {
+            // 1. Get current bookings freshly
+            const currentBookings = await api.getBookings();
+            
+            // 2. Calculate available seats (roughly) for current view
+            // Note: This is a simplified randomizer for demo purposes
+            const MAX_ROWS = 6; 
+            const MAX_COLS = 8;
+            const r = Math.floor(Math.random() * MAX_ROWS);
+            const c = Math.floor(Math.random() * MAX_COLS);
+            const randomSeatId = state.selectedSpace?.type === 'library' ? `R${r}-C${c}` : `SEM-R${r}-C${c}`; // Simplified
+
+            // 3. Attempt to book as a "Ghost User"
+            const isTaken = currentBookings.some(b => 
+                b.spaceId === state.selectedSpace?.id && 
+                b.timeId === state.selectedTime?.id && 
+                b.seatId === randomSeatId
+            );
+
+            if (!isTaken) {
+                const ghostBooking: BookingRecord = {
+                    spaceId: state.selectedSpace!.id,
+                    timeId: state.selectedTime!.id,
+                    seatId: randomSeatId,
+                    timestamp: Date.now(),
+                    userId: 'ghost-user-' + Math.floor(Math.random() * 1000)
+                };
+                
+                try {
+                    await api.bookSeats([ghostBooking]);
+                    console.log("👻 Simulation: Ghost user booked seat", randomSeatId);
+                } catch (e) {
+                    // Ignore conflicts in simulation
+                }
+            }
+        };
+
+        simulationIntervalRef.current = window.setInterval(runSimulation, 3000); // Try to book every 3 seconds
+    } else {
+        if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+    }
+
+    return () => {
+        if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+    };
+  }, [simulationEnabled, state.selectedSpace, state.selectedTime]);
+
+
+  // Real-time Conflict Handling: Auto-deselect if visually booked
   useEffect(() => {
     if (state.selectedSeats.length > 0 && bookings.length > 0) {
         const validSelections = state.selectedSeats.filter(seatId => {
@@ -76,10 +128,8 @@ function App() {
             return !isNowBooked;
         });
 
-        // If the number of valid seats is less than what we had selected, update state
         if (validSelections.length !== state.selectedSeats.length) {
             setState(prev => ({ ...prev, selectedSeats: validSelections }));
-            // Note: The UI will automatically update the seat to "Occupied" (gray) due to the bookings update
         }
     }
   }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats]);
@@ -128,32 +178,12 @@ function App() {
     });
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!state.selectedSpace || !state.selectedTime) return;
+    
+    setIsProcessing(true);
 
-    // Simulate Atomic Transaction:
-    // 1. Re-read storage to get the absolute latest state (in case another tab wrote data milliseconds ago)
-    const latestStr = localStorage.getItem('findMySpaceBookings');
-    const latestBookings: BookingRecord[] = latestStr ? JSON.parse(latestStr) : [];
-
-    // 2. Check for conflicts
-    const hasConflict = state.selectedSeats.some(seatId => 
-        latestBookings.some(b => 
-            b.spaceId === state.selectedSpace!.id && 
-            b.timeId === state.selectedTime!.id && 
-            b.seatId === seatId
-        )
-    );
-
-    if (hasConflict) {
-        alert("One or more selected seats were just booked by another user. Please select different seats.");
-        // Refresh local state with latest data
-        setBookings(latestBookings);
-        setState(prev => ({ ...prev, selectedSeats: [] }));
-        return;
-    }
-
-    // 3. Create new booking records
+    // Prepare booking payload
     const newBookings: BookingRecord[] = state.selectedSeats.map(seatId => ({
       spaceId: state.selectedSpace!.id,
       timeId: state.selectedTime!.id,
@@ -162,17 +192,22 @@ function App() {
       userId: user?.studentId
     }));
 
-    // 4. Save merged data
-    const updatedBookings = [...latestBookings, ...newBookings];
-    setBookings(updatedBookings);
-    localStorage.setItem('findMySpaceBookings', JSON.stringify(updatedBookings));
-
-    // 5. Trigger Real-time Sync across tabs
-    const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-    channel.postMessage('BOOKING_UPDATED');
-    channel.close();
-
-    setState(prev => ({ ...prev, step: 'confirmation' }));
+    try {
+        // CALL THE API (Simulated Backend)
+        await api.bookSeats(newBookings);
+        
+        // Success!
+        setState(prev => ({ ...prev, step: 'confirmation' }));
+    } catch (error: any) {
+        // Handle Race Condition Error
+        alert(error.message || "Booking failed due to a conflict.");
+        
+        // Refresh data to show the user what was taken
+        await refreshBookings();
+        setState(prev => ({ ...prev, selectedSeats: [] }));
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const handleReset = () => {
@@ -590,10 +625,17 @@ function App() {
                 <button
                   onClick={handleConfirm}
                   type="button"
-                  disabled={state.selectedSeats.length === 0}
-                  className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed hover:-translate-y-0.5 transition-all"
+                  disabled={state.selectedSeats.length === 0 || isProcessing}
+                  className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed hover:-translate-y-0.5 transition-all flex justify-center items-center gap-2"
                 >
-                  Confirm Booking
+                  {isProcessing ? (
+                     <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        Processing...
+                     </>
+                  ) : (
+                     "Confirm Booking"
+                  )}
                 </button>
              </div>
           </div>
@@ -687,10 +729,23 @@ function App() {
 
       <footer className="mt-auto py-8 text-center text-slate-400 dark:text-slate-500 text-xs border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors duration-300">
         <p className="mb-2">© 2024 Find My Space. K.K Wagh Institute Of Engineering Project.</p>
-        <p className="flex items-center justify-center gap-1 opacity-70">
-            <AlertCircle size={10} /> 
-            Demo Mode: Data is stored in your browser's local storage and will not sync across different browsers or devices.
-        </p>
+        <div className="flex flex-col items-center justify-center gap-2 mt-4">
+             <button 
+                onClick={() => setSimulationEnabled(!simulationEnabled)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${
+                    simulationEnabled 
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800' 
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
+                }`}
+             >
+                {simulationEnabled ? <Zap size={10} className="fill-current" /> : <ZapOff size={10} />}
+                {simulationEnabled ? "Simulating Live Traffic" : "Enable Traffic Simulator"}
+             </button>
+             <p className="flex items-center justify-center gap-1 opacity-70">
+                <AlertCircle size={10} /> 
+                Demo Mode: Data is stored in your browser's local storage.
+            </p>
+        </div>
       </footer>
     </div>
   );
