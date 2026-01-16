@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Lock, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { User, Lock, ArrowRight, AlertCircle, Quote } from 'lucide-react';
 import { USERS } from '../users';
 import { User as UserType } from '../types';
 
@@ -124,25 +124,23 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           />
           
           <div className="relative z-20 text-white max-w-lg px-12 animate-slide-up">
-              <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center mb-8 border border-white/20">
-                <Sparkles size={32} className="text-indigo-300" />
-              </div>
+              {/* Star/Sparkles Logo Removed */}
+              
               <h2 className="text-5xl font-extrabold mb-6 leading-tight">Your Space, <br/> Your Way.</h2>
               <p className="text-indigo-100 text-lg leading-relaxed font-light">
                   Reserve your favorite spot in the library, seminar halls, or labs in seconds. 
                   Experience the smartest way to manage your campus life.
               </p>
 
-              <div className="mt-12 flex gap-4">
-                  <div className="flex -space-x-4">
-                      <div className="w-10 h-10 rounded-full border-2 border-indigo-900 bg-slate-300"></div>
-                      <div className="w-10 h-10 rounded-full border-2 border-indigo-900 bg-slate-400"></div>
-                      <div className="w-10 h-10 rounded-full border-2 border-indigo-900 bg-slate-200"></div>
-                  </div>
-                  <div className="flex flex-col justify-center">
-                      <span className="font-bold text-sm">2k+ Students</span>
-                      <span className="text-xs text-indigo-300">Active Daily</span>
-                  </div>
+              {/* Quote Section replaced the social stats */}
+              <div className="mt-12 pt-8 border-t border-white/10">
+                  <Quote size={24} className="text-indigo-400 mb-4 opacity-80" />
+                  <p className="text-xl font-medium text-white/90 italic leading-relaxed">
+                      "The best way to predict the future is to create it."
+                  </p>
+                  <p className="text-sm text-indigo-300 mt-4 font-bold uppercase tracking-widest">
+                      — Peter Drucker
+                  </p>
               </div>
           </div>
       </div>

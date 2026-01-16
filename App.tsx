@@ -440,6 +440,7 @@ function App() {
 
                 <button
                   onClick={handleConfirm}
+                  type="button"
                   disabled={state.selectedSeats.length === 0}
                   className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed hover:-translate-y-0.5 transition-all"
                 >
