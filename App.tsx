@@ -85,10 +85,10 @@ function App() {
             
             // Logic to generate valid seat IDs only
             if (state.selectedSpace.type === 'library') {
-                const r = Math.floor(Math.random() * 6);
-                let c = Math.floor(Math.random() * 8);
-                if (c === 4) c = 3; 
-                randomSeatId = `R${r}-C${c}`;
+                // Library now has Tables 1-15, Seats 1-6
+                const tableId = Math.floor(Math.random() * 15) + 1;
+                const seatNum = Math.floor(Math.random() * 6) + 1;
+                randomSeatId = `LIB-T${tableId}-${seatNum}`;
             } else if (state.selectedSpace.type === 'lab') {
                 const r = Math.floor(Math.random() * 8);
                 const c = Math.floor(Math.random() * 10);

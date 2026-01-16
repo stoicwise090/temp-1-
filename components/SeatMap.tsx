@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Space, Seat, BookingRecord } from '../types';
-import { Monitor, Table, Check, Lock, CheckCircle2, XCircle } from 'lucide-react';
+import { Monitor, Table, Check, Lock, CheckCircle2, XCircle, DoorOpen, Phone } from 'lucide-react';
 
 interface SeatMapProps {
   space: Space;
@@ -37,20 +37,89 @@ export const SeatMap: React.FC<SeatMapProps> = ({
     };
 
     if (space.type === 'library') {
-      // 6 Rows x 8 Cols
-      for (let r = 0; r < 6; r++) {
-        for (let c = 0; c < 8; c++) {
-          const isGap = c === 4;
-          const seatId = `R${r}-C${c}`;
-          generatedSeats.push({
-            id: seatId,
-            row: r,
-            col: c,
-            status: isGap ? 'gap' : getBookingStatus(seatId),
-            label: `${String.fromCharCode(65 + r)}${c + 1}`
-          });
+      // Grid Dimensions based on sketch
+      // Left block: 2 tables wide (approx 7 cols)
+      // Gap: approx 3 cols
+      // Right block: 3 tables wide (approx 11 cols)
+      const MAX_ROWS = 14; 
+      const MAX_COLS = 21;
+
+      // Helper to define where tables are
+      // Table ID -> [StartRow, StartCol]
+      const tablePositions: Record<number, [number, number]> = {
+        // Left Side
+        1: [0, 0],  2: [0, 4],
+        3: [4, 0],  4: [4, 4],
+        5: [8, 0],  6: [8, 4],
+        
+        // Right Side
+        7: [0, 10], 8: [0, 14], 9: [0, 18],
+        10:[4, 10], 11:[4, 14], 12:[4, 18],
+        13:[8, 10], 14:[8, 14], 15:[8, 18]
+      };
+
+      for (let r = 0; r < MAX_ROWS; r++) {
+        for (let c = 0; c < MAX_COLS; c++) {
+          let seat: Seat = { 
+            id: `gap-${r}-${c}`, 
+            row: r, 
+            col: c, 
+            status: 'gap' 
+          };
+
+          // Check if this coordinate belongs to a table
+          let activeTableId = 0;
+          for (const [tId, [tR, tC]] of Object.entries(tablePositions)) {
+            const tableId = parseInt(tId);
+            // A table occupies 3 rows (Seats, Table, Seats) and 3 cols
+            if (r >= tR && r < tR + 3 && c >= tC && c < tC + 3) {
+              activeTableId = tableId;
+              
+              // Relative position in the table 3x3 grid
+              const relR = r - tR;
+              const relC = c - tC;
+
+              if (relR === 1) {
+                // Middle row is the table surface
+                seat.status = 'table';
+                seat.label = `T${tableId}`;
+              } else {
+                // Row 0 and 2 are seats
+                // Seat Numbering: Top row 1-3, Bottom row 4-6
+                const seatNum = relR === 0 ? relC + 1 : relC + 4;
+                const actualSeatId = `LIB-T${tableId}-${seatNum}`;
+                
+                seat.id = actualSeatId;
+                seat.status = getBookingStatus(actualSeatId);
+                seat.label = `${seatNum}`;
+              }
+              break; 
+            }
+          }
+
+          // Special Areas
+          // Staircase / Entrance (Middle)
+          if (r >= 4 && r <= 6 && c >= 7 && c <= 9) {
+            seat.status = 'gap';
+            if (r === 5 && c === 8) {
+               seat.status = 'cabin'; // Reusing cabin style for label
+               seat.label = "Entrance";
+            }
+          }
+
+          // Reception (Bottom Left)
+          if (r >= 12 && c >= 0 && c <= 3) {
+             seat.status = 'table'; // Use table style for desk
+             if (r === 12 && c === 1) {
+                 seat.status = 'cabin';
+                 seat.label = "Reception";
+             }
+          }
+
+          generatedSeats.push(seat);
         }
       }
+
     } else if (space.type === 'lab') {
       // Lab Layout
       const rows = 8;
@@ -154,9 +223,9 @@ export const SeatMap: React.FC<SeatMapProps> = ({
         )}
 
         <div 
-          className="grid gap-3"
+          className="grid gap-2"
           style={{ 
-            gridTemplateColumns: `repeat(${maxCol + 1}, minmax(40px, 1fr))` 
+            gridTemplateColumns: `repeat(${maxCol + 1}, minmax(36px, 1fr))` 
           }}
         >
           {seats.map(seat => (
@@ -182,20 +251,22 @@ const SeatButton: React.FC<{
   type: string;
 }> = ({ seat, isSelected, onToggle, type }) => {
   
-  if (seat.status === 'gap') return <div className="w-8 h-8" />;
+  if (seat.status === 'gap') return <div className="w-8 h-8 sm:w-9 sm:h-9" />;
   
   if (seat.status === 'table') {
     return (
-      <div className="w-10 h-10 bg-slate-200 dark:bg-slate-700 rounded-xl flex items-center justify-center text-slate-400 dark:text-slate-500">
-        <Table size={18} />
+      <div className="w-full h-full min-w-[32px] min-h-[32px] bg-slate-200 dark:bg-slate-700/50 rounded-md flex items-center justify-center text-slate-400 dark:text-slate-500 text-[10px] font-bold">
+        {seat.label || <Table size={14} />}
       </div>
     );
   }
 
   if (seat.status === 'cabin') {
+    const isEntrance = seat.label === "Entrance";
     return (
-      <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg flex items-center justify-center text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase">
-        Staff
+      <div className={`w-auto px-2 h-8 ${isEntrance ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600' : 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600'} rounded-lg flex items-center justify-center gap-1 text-[9px] font-bold uppercase whitespace-nowrap`}>
+        {isEntrance ? <DoorOpen size={12} /> : <Phone size={12} />}
+        {seat.label}
       </div>
     );
   }
@@ -203,12 +274,11 @@ const SeatButton: React.FC<{
   const isBookedByMe = seat.status === 'booked-by-me';
   const isBooked = seat.status === 'booked';
   
-  // Enable button if it's available, selected, OR booked by me (for cancellation)
-  // Only disable if booked by someone else
   const isDisabled = isBooked; 
 
-  let baseClass = "relative flex items-center justify-center rounded-lg transition-all duration-300 text-xs font-semibold group ";
-  let sizeClass = type === 'seminar' ? "w-8 h-8 sm:w-10 sm:h-10" : "w-10 h-10 sm:w-11 sm:h-11";
+  let baseClass = "relative flex items-center justify-center rounded-lg transition-all duration-300 text-[10px] font-bold group ";
+  // Slightly smaller seats for library to fit the complex layout
+  let sizeClass = type === 'library' ? "w-8 h-8 sm:w-9 sm:h-9" : "w-10 h-10 sm:w-11 sm:h-11";
   
   if (isBookedByMe) {
     baseClass += "bg-teal-500 dark:bg-teal-600 text-white shadow-sm ring-1 ring-teal-600 dark:ring-teal-400 opacity-100 hover:bg-red-500 hover:ring-red-500 cursor-pointer ";
@@ -235,15 +305,15 @@ const SeatButton: React.FC<{
     >
       {isBookedByMe ? (
         <>
-          <Check size={16} strokeWidth={3} className="group-hover:hidden" />
-          <XCircle size={16} strokeWidth={3} className="hidden group-hover:block" />
+          <Check size={14} strokeWidth={3} className="group-hover:hidden" />
+          <XCircle size={14} strokeWidth={3} className="hidden group-hover:block" />
         </>
       ) : isSelected ? (
-        <CheckCircle2 size={type === 'seminar' ? 16 : 18} className="animate-pop" />
+        <CheckCircle2 size={14} className="animate-pop" />
       ) : type === 'lab' ? (
-        isBooked ? <Lock size={14} /> : <Monitor size={15} />
+        isBooked ? <Lock size={12} /> : <Monitor size={14} />
       ) : (
-        isBooked ? <Lock size={14} /> : seat.label
+        isBooked ? <Lock size={12} /> : seat.label
       )}
     </button>
   );
