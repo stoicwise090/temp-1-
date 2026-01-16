@@ -4,17 +4,8 @@ import { SeatMap } from './components/SeatMap';
 import { Login } from './components/Login';
 import { Profile } from './components/Profile';
 import { SPACES, TIME_SLOTS } from './constants';
-import { BookingState, Space, TimeSlot, User } from './types';
-import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair } from 'lucide-react';
-
-// Interface for stored booking data
-interface BookingRecord {
-  spaceId: string;
-  timeId: string;
-  seatId: string;
-  timestamp: number;
-  userId?: string;
-}
+import { BookingState, Space, TimeSlot, User, BookingRecord } from './types';
+import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle } from 'lucide-react';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -28,17 +19,32 @@ function App() {
 
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [timeFilter, setTimeFilter] = useState<'ALL' | 'AM' | 'PM'>('ALL');
+  const [scheduleFilter, setScheduleFilter] = useState<'TODAY' | 'WEEK' | 'MONTH'>('TODAY');
 
   // Load bookings from local storage on mount
   useEffect(() => {
-    const storedBookings = localStorage.getItem('findMySpaceBookings');
-    if (storedBookings) {
-      try {
-        setBookings(JSON.parse(storedBookings));
-      } catch (error) {
-        console.error("Failed to parse bookings from local storage", error);
-      }
-    }
+    const loadBookings = () => {
+        const storedBookings = localStorage.getItem('findMySpaceBookings');
+        if (storedBookings) {
+            try {
+                setBookings(JSON.parse(storedBookings));
+            } catch (error) {
+                console.error("Failed to parse bookings from local storage", error);
+            }
+        }
+    };
+
+    loadBookings();
+
+    // Listen for storage events to sync across tabs in the same browser
+    const handleStorageChange = (e: StorageEvent) => {
+        if (e.key === 'findMySpaceBookings') {
+            loadBookings();
+        }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Scroll to top on step change
@@ -66,14 +72,6 @@ function App() {
       setState(prev => ({ ...prev, step: 'profile' }));
   };
 
-  // Get seat IDs that are booked for the current space and time
-  const getBookedSeatIds = () => {
-    if (!state.selectedSpace || !state.selectedTime) return [];
-    return bookings
-      .filter(b => b.spaceId === state.selectedSpace?.id && b.timeId === state.selectedTime?.id)
-      .map(b => b.seatId);
-  };
-
   const handleSpaceSelect = (space: Space) => {
     setState(prev => ({ ...prev, selectedSpace: space, step: 'time' }));
     setTimeFilter('ALL');
@@ -96,7 +94,29 @@ function App() {
   const handleConfirm = () => {
     if (!state.selectedSpace || !state.selectedTime) return;
 
-    // Create new booking records
+    // Simulate Atomic Transaction:
+    // 1. Re-read storage to get the absolute latest state (in case another tab wrote data)
+    const latestStr = localStorage.getItem('findMySpaceBookings');
+    const latestBookings: BookingRecord[] = latestStr ? JSON.parse(latestStr) : [];
+
+    // 2. Check for conflicts
+    const hasConflict = state.selectedSeats.some(seatId => 
+        latestBookings.some(b => 
+            b.spaceId === state.selectedSpace!.id && 
+            b.timeId === state.selectedTime!.id && 
+            b.seatId === seatId
+        )
+    );
+
+    if (hasConflict) {
+        alert("One or more selected seats were just booked by another user. Please select different seats.");
+        // Refresh local state with latest data
+        setBookings(latestBookings);
+        setState(prev => ({ ...prev, selectedSeats: [] }));
+        return;
+    }
+
+    // 3. Create new booking records
     const newBookings: BookingRecord[] = state.selectedSeats.map(seatId => ({
       spaceId: state.selectedSpace!.id,
       timeId: state.selectedTime!.id,
@@ -105,8 +125,8 @@ function App() {
       userId: user?.studentId
     }));
 
-    // Update state and local storage
-    const updatedBookings = [...bookings, ...newBookings];
+    // 4. Save merged data
+    const updatedBookings = [...latestBookings, ...newBookings];
     setBookings(updatedBookings);
     localStorage.setItem('findMySpaceBookings', JSON.stringify(updatedBookings));
 
@@ -137,8 +157,8 @@ function App() {
   const renderSchedule = () => {
     if (!user) return null;
     
-    // Filter and enrich bookings
-    const myBookings = bookings
+    // Enrich bookings with space and time info
+    const allMyBookings = bookings
       .filter(b => b.userId === user.studentId)
       .map(b => {
         const space = SPACES.find(s => s.id === b.spaceId);
@@ -147,14 +167,81 @@ function App() {
       })
       .filter((item): item is BookingRecord & { space: Space, time: TimeSlot } => !!item.space && !!item.time);
 
+    // Filter bookings based on scheduleFilter (Today, Week, Month)
+    const myBookings = allMyBookings.filter(b => {
+        const bookingDate = new Date(b.timestamp);
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        if (scheduleFilter === 'TODAY') {
+            // Check if booking is today
+            return bookingDate >= startOfToday && bookingDate < new Date(startOfToday.getTime() + 86400000);
+        }
+        
+        if (scheduleFilter === 'WEEK') {
+            // Check if booking is in the current week (Sunday to Saturday)
+            const startOfWeek = new Date(startOfToday);
+            startOfWeek.setDate(startOfToday.getDate() - startOfToday.getDay()); // Start of week (Sunday)
+            const endOfWeek = new Date(startOfWeek);
+            endOfWeek.setDate(startOfWeek.getDate() + 7); // Start of next week
+            
+            return bookingDate >= startOfWeek && bookingDate < endOfWeek;
+        }
+        
+        if (scheduleFilter === 'MONTH') {
+            // Check if booking is in the current month
+            return bookingDate.getMonth() === now.getMonth() && 
+                   bookingDate.getFullYear() === now.getFullYear();
+        }
+        
+        return true;
+    });
+
+    // Determine the empty state message
+    const getEmptyStateMessage = () => {
+        switch (scheduleFilter) {
+            case 'TODAY': return "You haven't booked any spaces for today.";
+            case 'WEEK': return "You haven't booked any spaces this week.";
+            case 'MONTH': return "You haven't booked any spaces this month.";
+            default: return "You haven't booked any spaces yet.";
+        }
+    };
+
     if (myBookings.length === 0) {
         return (
-             <div className="mb-12 bg-white dark:bg-slate-800 rounded-3xl p-8 border border-slate-100 dark:border-slate-700 shadow-lg shadow-slate-200/50 dark:shadow-slate-900/50 flex flex-col items-center justify-center text-center transition-colors duration-300">
-                <div className="w-16 h-16 bg-slate-50 dark:bg-slate-700 rounded-full flex items-center justify-center mb-4 text-slate-300 dark:text-slate-500">
-                    <Calendar size={32} />
+            <div className="mb-12 animate-slide-up">
+                 <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                            <Calendar size={20} />
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Your Schedule</h2>
+                    </div>
+                    {/* Filter Toggles */}
+                    <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                        {(['TODAY', 'WEEK', 'MONTH'] as const).map((filter) => (
+                            <button
+                                key={filter}
+                                onClick={() => setScheduleFilter(filter)}
+                                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
+                                    scheduleFilter === filter
+                                        ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                                }`}
+                            >
+                                {filter === 'TODAY' ? 'Today' : filter === 'WEEK' ? 'Week' : 'Month'}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-                <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-1">No Upcoming Bookings</h3>
-                <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto text-sm">You haven't booked any spaces yet. Select a facility below to get started.</p>
+
+                 <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 border border-slate-100 dark:border-slate-700 shadow-lg shadow-slate-200/50 dark:shadow-slate-900/50 flex flex-col items-center justify-center text-center transition-colors duration-300">
+                    <div className="w-16 h-16 bg-slate-50 dark:bg-slate-700 rounded-full flex items-center justify-center mb-4 text-slate-300 dark:text-slate-500">
+                        <Calendar size={32} />
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-1">No Bookings Found</h3>
+                    <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto text-sm">{getEmptyStateMessage()}</p>
+                </div>
             </div>
         );
     }
@@ -188,8 +275,22 @@ function App() {
                 </div>
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Your Schedule</h2>
             </div>
-            <div className="text-sm font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full">
-                Today
+            
+            {/* Filter Toggles */}
+            <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                {(['TODAY', 'WEEK', 'MONTH'] as const).map((filter) => (
+                    <button
+                        key={filter}
+                        onClick={() => setScheduleFilter(filter)}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
+                            scheduleFilter === filter
+                                ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                        }`}
+                    >
+                        {filter === 'TODAY' ? 'Today' : filter === 'WEEK' ? 'Week' : 'Month'}
+                    </button>
+                ))}
             </div>
         </div>
 
@@ -387,10 +488,12 @@ function App() {
               space={state.selectedSpace} 
               selectedSeats={state.selectedSeats} 
               onToggleSeat={toggleSeat} 
-              bookedSeats={getBookedSeatIds()}
+              bookings={bookings} // Pass full bookings list
+              currentUserId={user?.studentId} // Pass current user to identify 'my bookings'
+              selectedTimeId={state.selectedTime?.id}
             />
             
-            <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-700 flex justify-center gap-8">
+            <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-700 flex flex-wrap justify-center gap-4 sm:gap-8">
                <div className="flex items-center gap-2">
                  <div className="w-4 h-4 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-500"></div>
                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Available</span>
@@ -400,7 +503,11 @@ function App() {
                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Selected</span>
                </div>
                <div className="flex items-center gap-2">
-                 <div className="w-4 h-4 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"></div>
+                 <div className="w-4 h-4 rounded bg-teal-500 dark:bg-teal-600 shadow-sm border border-teal-600 dark:border-teal-400"></div>
+                 <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Booked by You</span>
+               </div>
+               <div className="flex items-center gap-2">
+                 <div className="w-4 h-4 rounded bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"></div>
                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Occupied</span>
                </div>
             </div>
@@ -537,7 +644,11 @@ function App() {
       </main>
 
       <footer className="mt-auto py-8 text-center text-slate-400 dark:text-slate-500 text-xs border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors duration-300">
-        <p>© 2024 Find My Space. K.K Wagh Institute Of Engineering Project.</p>
+        <p className="mb-2">© 2024 Find My Space. K.K Wagh Institute Of Engineering Project.</p>
+        <p className="flex items-center justify-center gap-1 opacity-70">
+            <AlertCircle size={10} /> 
+            Demo Mode: Data is stored in your browser's local storage and will not sync across different browsers or devices.
+        </p>
       </footer>
     </div>
   );

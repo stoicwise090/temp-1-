@@ -19,7 +19,7 @@ export interface Seat {
   id: string;
   row: number;
   col: number;
-  status: 'available' | 'booked' | 'selected' | 'gap' | 'screen' | 'table' | 'cabin';
+  status: 'available' | 'booked' | 'booked-by-me' | 'selected' | 'gap' | 'screen' | 'table' | 'cabin';
   label?: string;
 }
 
@@ -43,4 +43,12 @@ export interface BookingState {
   selectedSpace: Space | null;
   selectedTime: TimeSlot | null;
   selectedSeats: string[];
+}
+
+export interface BookingRecord {
+  spaceId: string;
+  timeId: string;
+  seatId: string;
+  timestamp: number;
+  userId?: string;
 }

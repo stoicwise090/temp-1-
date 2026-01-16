@@ -1,20 +1,44 @@
 import React, { useMemo } from 'react';
-import { Space, Seat } from '../types';
-import { Monitor, Table } from 'lucide-react';
+import { Space, Seat, BookingRecord } from '../types';
+import { Monitor, Table, Check, Lock } from 'lucide-react';
 
 interface SeatMapProps {
   space: Space;
   selectedSeats: string[];
   onToggleSeat: (seatId: string) => void;
-  bookedSeats: string[];
+  bookings: BookingRecord[];
+  currentUserId?: string;
+  selectedTimeId?: string;
 }
 
-export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggleSeat, bookedSeats }) => {
+export const SeatMap: React.FC<SeatMapProps> = ({ 
+  space, 
+  selectedSeats, 
+  onToggleSeat, 
+  bookings, 
+  currentUserId,
+  selectedTimeId
+}) => {
   
   // Generate the layout configuration based on space type
   const seats = useMemo(() => {
     const generatedSeats: Seat[] = [];
     
+    // Helper to check booking status
+    const getBookingStatus = (seatId: string): Seat['status'] => {
+      // Find a booking for this specific seat, space, and time
+      const booking = bookings.find(b => 
+        b.spaceId === space.id && 
+        b.timeId === selectedTimeId && 
+        b.seatId === seatId
+      );
+
+      if (!booking) return 'available';
+      
+      // Distinguish between my booking and others
+      return booking.userId === currentUserId ? 'booked-by-me' : 'booked';
+    };
+
     if (space.type === 'library') {
       // 6 Rows x 8 Cols Standard Grid
       for (let r = 0; r < 6; r++) {
@@ -25,13 +49,13 @@ export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggle
             id: seatId,
             row: r,
             col: c,
-            status: isGap ? 'gap' : (bookedSeats.includes(seatId) ? 'booked' : 'available'),
+            status: isGap ? 'gap' : getBookingStatus(seatId),
             label: `${String.fromCharCode(65 + r)}${c + 1}`
           });
         }
       }
     } else if (space.type === 'lab') {
-      // Computer Lab Layout (Columns of PCs, Center Tables)
+      // Computer Lab Layout
       const rows = 8;
       const cols = 10;
       
@@ -45,12 +69,11 @@ export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggle
           else if (r > 2 && r < 6 && c > 3 && c < 6) type = 'table'; // Center meeting table
           else type = 'gap'; // Walkways
 
-          // Cabin at back
           if (r === rows - 1 && (c === 4 || c === 5)) type = 'cabin';
 
           // Check if booked (only if it was available)
-          if (type === 'available' && bookedSeats.includes(seatId)) {
-            type = 'booked';
+          if (type === 'available') {
+            type = getBookingStatus(seatId);
           }
 
           generatedSeats.push({
@@ -58,12 +81,12 @@ export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggle
             row: r,
             col: c,
             status: type,
-            label: type === 'available' || type === 'booked' ? `PC-${r * cols + c}` : undefined
+            label: type === 'available' || type === 'booked' || type === 'booked-by-me' ? `PC-${r * cols + c}` : undefined
           });
         }
       }
     } else {
-      // Seminar Hall (Curved rows logic simulated by offsets in render)
+      // Seminar Hall
       const rows = 8;
       const maxCols = 14;
       for (let r = 0; r < rows; r++) {
@@ -75,8 +98,8 @@ export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggle
           const seatId = `SEM-R${r}-C${c}`;
           
           let status: Seat['status'] = !isValidSeat ? 'gap' : 'available';
-          if (status === 'available' && bookedSeats.includes(seatId)) {
-            status = 'booked';
+          if (status === 'available') {
+            status = getBookingStatus(seatId);
           }
 
           generatedSeats.push({
@@ -90,7 +113,7 @@ export const SeatMap: React.FC<SeatMapProps> = ({ space, selectedSeats, onToggle
       }
     }
     return generatedSeats;
-  }, [space.type, bookedSeats]);
+  }, [space.type, bookings, currentUserId, selectedTimeId, space.id]);
 
   // Render logic based on type
   if (space.type === 'seminar') {
@@ -191,27 +214,39 @@ const SeatButton: React.FC<{
     );
   }
 
+  const isBookedByMe = seat.status === 'booked-by-me';
   const isBooked = seat.status === 'booked';
   
   let baseClass = "relative flex items-center justify-center rounded-lg transition-all duration-300 text-xs font-semibold ";
   let sizeClass = type === 'seminar' ? "w-8 h-8 sm:w-10 sm:h-10" : "w-10 h-10 sm:w-11 sm:h-11";
   
-  if (isBooked) {
-    baseClass += "bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed border border-slate-200 dark:border-slate-700 opacity-60";
+  // Dynamic Styling based on state
+  if (isBookedByMe) {
+    baseClass += "bg-teal-500 dark:bg-teal-600 text-white cursor-default shadow-sm ring-1 ring-teal-600 dark:ring-teal-400 opacity-90 ";
+  } else if (isBooked) {
+    baseClass += "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed border border-slate-300 dark:border-slate-700 ";
   } else if (isSelected) {
-    baseClass += "bg-indigo-600 dark:bg-indigo-500 text-white shadow-lg shadow-indigo-500/40 scale-105 -translate-y-1 z-10 ring-2 ring-indigo-600 dark:ring-indigo-400 ring-offset-2 dark:ring-offset-slate-800";
+    baseClass += "bg-indigo-600 dark:bg-indigo-500 text-white shadow-lg shadow-indigo-500/40 scale-110 z-10 ring-2 ring-indigo-600 dark:ring-indigo-400 ring-offset-2 dark:ring-offset-slate-800 animate-pop ";
   } else {
-    baseClass += "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer border border-slate-200 dark:border-slate-600 shadow-sm hover:border-indigo-400 dark:hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-white hover:bg-indigo-50 dark:hover:bg-indigo-500/20 hover:-translate-y-0.5 hover:shadow-md";
+    baseClass += "bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer border border-slate-200 dark:border-slate-600 shadow-sm hover:border-indigo-400 dark:hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-white hover:bg-indigo-50 dark:hover:bg-indigo-500/20 hover:-translate-y-0.5 hover:shadow-md ";
   }
+
+  let titleText = `Seat ${seat.label}`;
+  if (isBookedByMe) titleText = `Booked by You`;
+  if (isBooked) titleText = `Occupied`;
 
   return (
     <button 
       onClick={onToggle}
-      disabled={isBooked}
+      disabled={isBooked || isBookedByMe}
       className={`${baseClass} ${sizeClass}`}
-      title={isBooked ? "Occupied" : `Seat ${seat.label}`}
+      title={titleText}
     >
-      {type === 'lab' ? <Monitor size={15} /> : seat.label}
+      {type === 'lab' ? (
+        isBookedByMe ? <Check size={16} /> : (isBooked ? <Lock size={14} /> : <Monitor size={15} />)
+      ) : (
+        isBookedByMe ? <Check size={16} /> : (isBooked ? <Lock size={14} /> : seat.label)
+      )}
     </button>
   );
 };
