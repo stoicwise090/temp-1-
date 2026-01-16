@@ -5,15 +5,16 @@ import { User as UserType } from '../types';
 interface NavbarProps {
     user: UserType | null;
     onProfileClick: () => void;
+    onHomeClick?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ user, onProfileClick }) => {
+export const Navbar: React.FC<NavbarProps> = ({ user, onProfileClick, onHomeClick }) => {
   return (
     <header className="sticky top-0 z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 transition-colors duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-20">
           {/* Logo */}
-          <div className="flex items-center gap-3 cursor-pointer group" onClick={onProfileClick}> 
+          <div className="flex items-center gap-3 cursor-pointer group" onClick={onHomeClick}> 
             <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/30 transform group-hover:rotate-12 transition-transform duration-300">
               F
             </div>

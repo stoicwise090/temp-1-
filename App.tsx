@@ -58,8 +58,6 @@ function App() {
     channel.onmessage = (event) => {
         if (event.data === 'BOOKING_UPDATED') {
             refreshBookings();
-            // Optional: Notify user if they are on a relevant screen
-            // addToast('info', 'Schedule updated from another device');
         }
     };
 
@@ -81,16 +79,15 @@ function App() {
         const runSimulation = async () => {
             if (!state.selectedSpace || !state.selectedTime) return;
 
-            // 1. Fetch latest to avoid trying to book obviously taken seats (smarter ghost)
             const currentBookings = await api.getBookings();
             
-            // 2. Determine bounds based on space type to generate VALID seat IDs
             let randomSeatId = '';
             
+            // Logic to generate valid seat IDs only
             if (state.selectedSpace.type === 'library') {
                 const r = Math.floor(Math.random() * 6);
-                const c = Math.floor(Math.random() * 8);
-                if (c === 4) return; // Gap
+                let c = Math.floor(Math.random() * 8);
+                if (c === 4) c = 3; 
                 randomSeatId = `R${r}-C${c}`;
             } else if (state.selectedSpace.type === 'lab') {
                 const r = Math.floor(Math.random() * 8);
@@ -102,7 +99,6 @@ function App() {
                 randomSeatId = `SEM-R${r}-C${c}`;
             }
 
-            // 3. Ghost Booking Payload
             const ghostBooking: BookingRecord = {
                 spaceId: state.selectedSpace.id,
                 timeId: state.selectedTime.id,
@@ -120,17 +116,16 @@ function App() {
             if (!isTaken) {
                 try {
                     await api.bookSeats([ghostBooking]);
-                    // Only show toast if the ghost booked a seat we are currently looking at or selected
                     if (state.selectedSeats.includes(randomSeatId)) {
                         addToast('info', `Ghost User snatched seat ${randomSeatId}!`);
                     }
                 } catch (e) {
-                    // Ghost failed silently (race condition with real user or another ghost)
+                   // Ignore conflicts
                 }
             }
         };
 
-        simulationIntervalRef.current = window.setInterval(runSimulation, 2500);
+        simulationIntervalRef.current = window.setInterval(runSimulation, 3000);
     } else {
         if (simulationIntervalRef.current) {
             clearInterval(simulationIntervalRef.current);
@@ -144,7 +139,7 @@ function App() {
   }, [simulationEnabled, state.selectedSpace, state.selectedTime, state.selectedSeats]);
 
 
-  // --- AUTO DESELECTION (Real-time Conflict Handling in UI) ---
+  // --- AUTO DESELECTION ---
   useEffect(() => {
     if (state.selectedSeats.length > 0 && bookings.length > 0) {
         const validSelections = state.selectedSeats.filter(seatId => {
@@ -157,7 +152,6 @@ function App() {
         });
 
         if (validSelections.length !== state.selectedSeats.length) {
-            // Identify which seat was lost
             const lostSeats = state.selectedSeats.filter(s => !validSelections.includes(s));
             setState(prev => ({ ...prev, selectedSeats: validSelections }));
             addToast('error', `Seat ${lostSeats.join(', ')} was just booked by someone else.`);
@@ -165,7 +159,6 @@ function App() {
     }
   }, [bookings, state.selectedSpace, state.selectedTime, state.selectedSeats]);
 
-  // Scroll to top on step change
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [state.step]);
@@ -191,6 +184,10 @@ function App() {
       setState(prev => ({ ...prev, step: 'profile' }));
   };
 
+  const navigateToHome = () => {
+      setState(prev => ({ ...prev, step: 'home', selectedSpace: null }));
+  };
+
   const handleSpaceSelect = (space: Space) => {
     setState(prev => ({ ...prev, selectedSpace: space, step: 'time' }));
     setTimeFilter('ALL');
@@ -200,7 +197,38 @@ function App() {
     setState(prev => ({ ...prev, selectedTime: time, step: 'seats', selectedSeats: [] }));
   };
 
+  const handleCancelBooking = async (seatId: string) => {
+    if (!state.selectedSpace || !state.selectedTime || !user) return;
+
+    if (window.confirm(`Are you sure you want to cancel your booking for Seat ${seatId}?`)) {
+        setIsProcessing(true);
+        try {
+            await api.cancelBooking(state.selectedSpace.id, state.selectedTime.id, seatId, user.studentId);
+            addToast('success', 'Booking cancelled successfully.');
+            refreshBookings();
+        } catch (e: any) {
+            addToast('error', e.message);
+        } finally {
+            setIsProcessing(false);
+        }
+    }
+  };
+
   const toggleSeat = (seatId: string) => {
+    // Check if this seat is booked by me
+    const isBookedByMe = bookings.some(b => 
+        b.spaceId === state.selectedSpace?.id && 
+        b.timeId === state.selectedTime?.id && 
+        b.seatId === seatId &&
+        b.userId === user?.studentId
+    );
+
+    if (isBookedByMe) {
+        handleCancelBooking(seatId);
+        return;
+    }
+
+    // Normal selection toggle
     setState(prev => {
       const exists = prev.selectedSeats.includes(seatId);
       const newSeats = exists 
@@ -211,7 +239,7 @@ function App() {
   };
 
   const handleConfirm = async () => {
-    if (!state.selectedSpace || !state.selectedTime) return;
+    if (!state.selectedSpace || !state.selectedTime || !user) return;
     
     setIsProcessing(true);
 
@@ -220,7 +248,7 @@ function App() {
       timeId: state.selectedTime!.id,
       seatId,
       timestamp: Date.now(),
-      userId: user?.studentId
+      userId: user.studentId
     }));
 
     try {
@@ -230,8 +258,6 @@ function App() {
         addToast('success', 'Booking Confirmed Successfully!');
     } catch (error: any) {
         addToast('error', error.message || "Booking failed due to a conflict.");
-        
-        // Refresh to show occupied status
         await refreshBookings();
         setState(prev => ({ ...prev, selectedSeats: [] }));
     } finally {
@@ -267,8 +293,6 @@ function App() {
   };
 
   // --- RENDER HELPERS ---
-  // (Most render helpers remained similar but optimized for context)
-
   const renderSchedule = () => {
     if (!user) return null;
     
@@ -591,7 +615,7 @@ function App() {
                </div>
                <div className="flex items-center gap-2">
                  <div className="w-4 h-4 rounded bg-teal-500 dark:bg-teal-600 shadow-sm border border-teal-600 dark:border-teal-400"></div>
-                 <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Booked by You</span>
+                 <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Booked by You (Click to Cancel)</span>
                </div>
                <div className="flex items-center gap-2">
                  <div className="w-4 h-4 rounded bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"></div>
@@ -700,7 +724,7 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col font-sans transition-colors duration-500">
       <ToastContainer toasts={toasts} removeToast={removeToast} />
-      <Navbar user={user} onProfileClick={navigateToProfile} />
+      <Navbar user={user} onProfileClick={navigateToProfile} onHomeClick={navigateToHome} />
 
       {state.step !== 'home' && state.step !== 'confirmation' && (
         <div className="max-w-7xl mx-auto px-4 py-6 w-full animate-fade-in">

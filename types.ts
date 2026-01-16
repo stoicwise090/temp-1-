@@ -50,5 +50,5 @@ export interface BookingRecord {
   timeId: string;
   seatId: string;
   timestamp: number;
-  userId?: string;
+  userId: string;
 }
