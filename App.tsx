@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { SeatMap } from './components/SeatMap';
@@ -7,10 +8,7 @@ import { ToastContainer, ToastMessage, ToastType } from './components/Toast';
 import { SPACES, TIME_SLOTS } from './constants';
 import { BookingState, Space, TimeSlot, User, BookingRecord } from './types';
 import { ArrowLeft, Calendar, Clock, CheckCircle2, MapPin, ChevronRight, User as UserIcon, Armchair, AlertCircle, Zap, ZapOff, Trash2 } from 'lucide-react';
-import { api } from './api';
-
-// Channel name for cross-tab communication
-const BROADCAST_CHANNEL_NAME = 'find-my-space-updates';
+import { api, LocalBookingService } from './api';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -54,22 +52,14 @@ function App() {
   useEffect(() => {
     refreshBookings();
 
-    const channel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-    channel.onmessage = (event) => {
-        if (event.data === 'BOOKING_UPDATED') {
-            refreshBookings();
-        }
-    };
-
-    const handleStorageChange = (e: StorageEvent) => {
-        if (e.key === 'findMySpaceBookings') refreshBookings();
-    };
-
-    window.addEventListener('storage', handleStorageChange);
+    // Subscribe to real-time updates using the new API interface
+    // This works for both Local (BroadcastChannel) and Remote (Supabase Realtime)
+    const unsubscribe = api.onBookingUpdate(() => {
+      refreshBookings();
+    });
     
     return () => {
-        channel.close();
-        window.removeEventListener('storage', handleStorageChange);
+      unsubscribe();
     };
   }, [refreshBookings]);
 
@@ -83,9 +73,7 @@ function App() {
             
             let randomSeatId = '';
             
-            // Logic to generate valid seat IDs only
             if (state.selectedSpace.type === 'library') {
-                // Library now has Tables 1-15, Seats 1-6
                 const tableId = Math.floor(Math.random() * 15) + 1;
                 const seatNum = Math.floor(Math.random() * 6) + 1;
                 randomSeatId = `LIB-T${tableId}-${seatNum}`;
@@ -141,8 +129,6 @@ function App() {
 
   // --- AUTO DESELECTION ---
   useEffect(() => {
-    // If we are in confirmation step, we don't need to check for conflicts 
-    // because we just successfully booked these seats.
     if (state.step === 'confirmation') return;
 
     if (state.selectedSeats.length > 0 && bookings.length > 0) {
@@ -153,14 +139,8 @@ function App() {
                 b.seatId === seatId
             );
 
-            // If no booking exists, the seat is still valid
             if (!blockingBooking) return true;
-
-            // If the booking exists BUT it belongs to the current user,
-            // we treat it as valid (not "stolen") so it doesn't trigger the error toast.
             if (blockingBooking.userId === user?.studentId) return true;
-
-            // Otherwise, it was taken by someone else
             return false;
         });
 
@@ -228,7 +208,6 @@ function App() {
   };
 
   const toggleSeat = (seatId: string) => {
-    // Check if this seat is booked by me
     const isBookedByMe = bookings.some(b => 
         b.spaceId === state.selectedSpace?.id && 
         b.timeId === state.selectedTime?.id && 
@@ -241,7 +220,6 @@ function App() {
         return;
     }
 
-    // Normal selection toggle
     setState(prev => {
       const exists = prev.selectedSeats.includes(seatId);
       const newSeats = exists 
@@ -270,10 +248,10 @@ function App() {
         setState(prev => ({ ...prev, step: 'confirmation' }));
         addToast('success', 'Booking Confirmed Successfully!');
         
-        // Immediately refresh bookings to ensure local state is up to date
-        // which might help UI reflect the "booked" status faster
         refreshBookings();
     } catch (error: any) {
+        // UI handles conflict resolution via auto-deselection effect, 
+        // but this catches the specific API error
         addToast('error', error.message || "Booking failed due to a conflict.");
         await refreshBookings();
         setState(prev => ({ ...prev, selectedSeats: [] }));
@@ -309,7 +287,7 @@ function App() {
     });
   };
 
-  // --- RENDER HELPERS ---
+  // --- RENDER HELPERS --- (Kept strictly to rendering logic to save space)
   const renderSchedule = () => {
     if (!user) return null;
     
@@ -788,7 +766,7 @@ function App() {
              </div>
              <p className="flex items-center justify-center gap-1 opacity-70 mt-2">
                 <AlertCircle size={10} /> 
-                Demo Mode: Data is stored in your browser's local storage.
+                Mode: {api instanceof LocalBookingService ? 'Local Demo' : 'Cloud Connected'}
             </p>
         </div>
       </footer>

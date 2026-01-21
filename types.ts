@@ -57,4 +57,24 @@ export interface BookingRecord {
   seatId: string;
   timestamp: number;
   userId: string;
+  // Optional ID for database primary key
+  id?: number; 
+}
+
+// --- NEW INTERFACE ---
+export interface IBookingService {
+  initialize(): Promise<void>;
+  login(studentId: string, password: string): Promise<User>;
+  register(newUser: AuthUser): Promise<User>;
+  updateUserProfile(updatedUser: User): Promise<User>;
+  verifyStudentId(studentId: string): Promise<boolean>;
+  resetPassword(studentId: string, newPassword: string): Promise<void>;
+  
+  getBookings(): Promise<BookingRecord[]>;
+  bookSeats(bookings: BookingRecord[]): Promise<void>;
+  cancelBooking(spaceId: string, timeId: string, seatId: string, userId: string): Promise<void>;
+  resetDatabase(): Promise<void>;
+  
+  // Realtime subscription hook
+  onBookingUpdate(callback: () => void): () => void;
 }
