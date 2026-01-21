@@ -1,3 +1,4 @@
+
 export interface Space {
   id: string;
   name: string;
@@ -36,6 +37,11 @@ export interface User {
   studentId: string;
   avatarUrl?: string;
   settings: UserSettings;
+}
+
+// Extended interface for internal storage including password
+export interface AuthUser extends User {
+  password: string; 
 }
 
 export interface BookingState {

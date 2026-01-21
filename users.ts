@@ -30,17 +30,5 @@ export const USERS: AuthUser[] = [
         publicProfile: true,
         darkMode: false
     }
-  },
-   {
-    studentId: '1111',
-    password: '9090',
-    name: 'Sara Bansod',
-    email: 'sara@kkwagh.edu.in',
-    settings: {
-        emailNotifications: true,
-        smsNotifications: false,
-        publicProfile: true,
-        darkMode: false
-    }
   }
 ];

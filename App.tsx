@@ -759,7 +759,7 @@ function App() {
         {state.step === 'time' && renderTimeSelection()}
         {state.step === 'seats' && renderSeatSelection()}
         {state.step === 'confirmation' && renderConfirmation()}
-        {state.step === 'profile' && user && <Profile user={user} onLogout={handleLogout} />}
+        {state.step === 'profile' && user && <Profile user={user} onLogout={handleLogout} onUpdateUser={setUser} />}
       </main>
 
       <footer className="mt-auto py-8 text-center text-slate-400 dark:text-slate-500 text-xs border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors duration-300">

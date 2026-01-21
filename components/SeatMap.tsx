@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { Space, Seat, BookingRecord } from '../types';
 import { Monitor, Table, Check, Lock, CheckCircle2, XCircle, DoorOpen, Phone } from 'lucide-react';
@@ -20,20 +21,27 @@ export const SeatMap: React.FC<SeatMapProps> = ({
   selectedTimeId
 }) => {
   
+  // OPTIMIZATION: Create a lookup map for bookings in this specific space/time
+  // This reduces complexity from O(Seats * Bookings) to O(Seats + Bookings)
+  const bookingMap = useMemo(() => {
+    const map = new Map<string, string>(); // SeatID -> UserID
+    bookings.forEach(b => {
+      if (b.spaceId === space.id && b.timeId === selectedTimeId) {
+        map.set(b.seatId, b.userId);
+      }
+    });
+    return map;
+  }, [bookings, space.id, selectedTimeId]);
+
   // Generate the layout configuration based on space type
   const seats = useMemo(() => {
     const generatedSeats: Seat[] = [];
     
-    // Helper to check booking status
+    // Helper to check booking status using the optimized map
     const getBookingStatus = (seatId: string): Seat['status'] => {
-      const booking = bookings.find(b => 
-        b.spaceId === space.id && 
-        b.timeId === selectedTimeId && 
-        b.seatId === seatId
-      );
-
-      if (!booking) return 'available';
-      return booking.userId === currentUserId ? 'booked-by-me' : 'booked';
+      if (!bookingMap.has(seatId)) return 'available';
+      const bookedBy = bookingMap.get(seatId);
+      return bookedBy === currentUserId ? 'booked-by-me' : 'booked';
     };
 
     if (space.type === 'library') {
@@ -172,7 +180,7 @@ export const SeatMap: React.FC<SeatMapProps> = ({
       }
     }
     return generatedSeats;
-  }, [space.type, bookings, currentUserId, selectedTimeId, space.id]);
+  }, [space.type, bookingMap, currentUserId, space.id]);
 
   const maxCol = seats.length > 0 ? Math.max(...seats.map(s => s.col)) : 0;
 
